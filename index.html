@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Block Shooter</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #000;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        
+        #gameContainer {
+            position: relative;
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        #gameCanvas {
+            border: 2px solid #b88484;
+            border-radius: 15px;
+            max-width: 100%;
+            max-height: 80vh;
+            object-fit: contain;
+        }
+        
+        #gameUI {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: min(15px, 4vw);
+
+            font-weight: bold;
+            text-align: center;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px 15px;
+            border-radius: 10px;
+        }
+        
+        #gameOver {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: min(32px, 6vw);
+            text-align: center;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+            z-index: 1000;
+        }
+      
+            .shadow__btn {
+            padding: 10px 20px;
+            border: none;
+            font-size: 17px;
+            color: #fff;
+            border-radius: 7px;
+            letter-spacing: 4px;
+            font-weight: 700; 
+            text-transform: uppercase;
+            transition: 0.5s;
+            transition-property: box-shadow;
+            }
+
+            .shadow__btn {
+            background: rgb(0,140,255);
+            box-shadow: 0 0 25px rgb(0,140,255);
+            }
+
+            .shadow__btn:hover {
+            box-shadow: 0 0 5px rgb(0,140,255),
+                        0 0 25px rgb(0,140,255),
+                        0 0 50px rgb(0,140,255),
+                        0 0 100px rgb(0,140,255);
+            }
+            #audioControls {
+            position: absolute;
+            margin-left: 10px;
+            width: 220px;
+            height: 20px;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            gap: 10px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 10px;
+        }
+
+        .audio-btn {
+            padding: 5px 10px;
+            background: rgb(0,140,255);
+            border: none;
+            color: white;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .audio-btn:hover {
+            box-shadow: 0 0 5px rgb(0,140,255);
+        }
+
+        #volumeSlider {
+            width: 100px;
+            margin: 0 10px;
+        }
+   
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="gameUI">Score: <span id="score">0</span></div>
+        <div id="audioControls">
+            <button style="font-size: 5px; padding: 5px; font-weight: bold; "  id="toggleMusic" class="shadow__btn">Music: OFF</button>
+            <input type="range" id="volumeSlider" min="0" max="100" value="50">
+        </div>
+        <canvas id="gameCanvas"></canvas>
+    
+        <audio id="bgMusic" loop>
+            <source src="bg.mp3" type="audio/mpeg">
+        </audio>
+    </div>
+
+    <script>
+        window.addEventListener('keydown', function(e) {
+            if(e.code === 'Space') {
+                e.preventDefault();
+            }
+        });
+
+        // Initialize WebGL
+        const canvas = document.getElementById('gameCanvas');
+        const gl = canvas.getContext('webgl');
+        const scoreElement = document.getElementById('score');
+
+        if (!gl) {
+            alert('WebGL not supported');
+            throw new Error('WebGL not supported');
+        }
+
+        // Vertex shader program
+        const vsSource = `
+            attribute vec4 aVertexPosition;
+            attribute vec2 aTextureCoord;
+            
+            uniform mat4 uModelViewMatrix;
+            uniform mat4 uProjectionMatrix;
+            
+            varying highp vec2 vTextureCoord;
+            
+            void main(void) {
+                gl_Position = uProjectionMatrix * uModelViewMatrix * aVertexPosition;
+                vTextureCoord = aTextureCoord;
+            }
+        `;
+
+        // Fragment shader program
+        const fsSource = `
+            varying highp vec2 vTextureCoord;
+            
+            uniform sampler2D uSampler;
+            
+            void main(void) {
+                gl_FragColor = texture2D(uSampler, vTextureCoord);
+            }
+        `;
+
+        // Initialize shaders
+        function initShaderProgram(gl, vsSource, fsSource) {
+            const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vsSource);
+            const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fsSource);
+
+            const shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, vertexShader);
+            gl.attachShader(shaderProgram, fragmentShader);
+            gl.linkProgram(shaderProgram);
+
+            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                alert('Unable to initialize shader program: ' + gl.getProgramInfoLog(shaderProgram));
+                return null;
+            }
+
+            return shaderProgram;
+        }
+
+        function loadShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                alert('An error occurred compiling the shaders: ' + gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+
+            return shader;
+        }
+
+        // Game objects
+        class GameObject {
+            constructor(x, y, width, height) {
+                this.x = x;
+                this.y = y;
+                this.width = width;
+                this.height = height;
+                this.hitPoints = 1;
+            }
+
+            intersects(other) {
+                return !(this.x + this.width < other.x ||
+                    other.x + other.width < this.x ||
+                    this.y + this.height < other.y ||
+                    other.y + other.height < this.y);
+            }
+        }
+
+        class Player extends GameObject {
+            constructor() {
+                super(canvas.width / 2 - 25, canvas.height - 40, 40, 30);
+                this.speed = 5;
+            }
+        }
+
+        class Block extends GameObject {
+            constructor(x) {
+                super(x, 0, 60, 60);
+                this.speed = 1;
+                this.hitPoints = Math.floor(Math.random() * 3) + 1;
+            }
+
+            update() {
+                this.y += this.speed;
+        
+            }
+        }
+
+        class Projectile extends GameObject {
+
+            constructor(x, y) {
+                super(x, y, 30,30);
+                this.speed = 12;
+            }
+
+            update() {
+                this.y -= this.speed;
+            }
+        }
+
+        // Game state
+        const gameState = {
+            player: new Player(),
+            blocks: [],
+            projectiles: [],
+            score: 0,
+            gameOver: false,
+            keys: {},
+            lastShot: 0,
+            shootDelay: 350, 
+        };
+
+        // Initialize buffers
+        function initBuffers(gl) {
+            const positions = [
+                -1.0, -1.0,
+                1.0, -1.0,
+                -1.0, 1.0,
+                1.0, 1.0,
+            ];
+
+            const textureCoords = [
+                0.0, 0.0,
+                1.0, 0.0,
+                0.0, 1.0,
+                1.0, 1.0,
+            ];
+
+            const positionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+            const textureCoordBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, textureCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
+
+            return {
+                position: positionBuffer,
+                textureCoord: textureCoordBuffer,
+            };
+        }
+
+        // Load texture
+        function loadTexture(gl, url) {
+            const texture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+
+            const level = 0;
+            const internalFormat = gl.RGBA;
+            const width = 1;
+            const height = 1;
+            const border = 0;
+            const srcFormat = gl.RGBA;
+            const srcType = gl.UNSIGNED_BYTE;
+            const pixel = new Uint8Array([0, 0, 255, 255]);  // Blue
+            gl.texImage2D(gl.TEXTURE_2D, level, internalFormat,
+                        width, height, border, srcFormat, srcType,
+                        pixel);
+
+            const image = new Image();
+            image.onload = function() {
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.texImage2D(gl.TEXTURE_2D, level, internalFormat,
+                            srcFormat, srcType, image);
+
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            };
+            image.src = url;
+
+            return texture;
+        }
+
+        // Initialize the game
+        const shaderProgram = initShaderProgram(gl, vsSource, fsSource);
+        const programInfo = {
+            program: shaderProgram,
+            attribLocations: {
+                vertexPosition: gl.getAttribLocation(shaderProgram, 'aVertexPosition'),
+                textureCoord: gl.getAttribLocation(shaderProgram, 'aTextureCoord'),
+            },
+            uniformLocations: {
+                projectionMatrix: gl.getUniformLocation(shaderProgram, 'uProjectionMatrix'),
+                modelViewMatrix: gl.getUniformLocation(shaderProgram, 'uModelViewMatrix'),
+                uSampler: gl.getUniformLocation(shaderProgram, 'uSampler'),
+            },
+        };
+
+        const buffers = initBuffers(gl);
+        
+       
+        const blockTexture = loadTexture(gl, 'enemy.png');
+        const playerTexture = loadTexture(gl, 'sship.png');
+        const projectileTexture = loadTexture(gl, 'laser.png');
+
+        // Game loop
+        function gameLoop() {
+            if (!gameState.gameOver) {
+                update();
+                draw();
+            }
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Matrix operations
+        function mat4() {}
+        mat4.create = function() {
+            return new Float32Array([
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            ]);
+        };
+        mat4.ortho = function(out, left, right, bottom, top, near, far) {
+            const lr = 1 / (left - right);
+            const bt = 1 / (bottom - top);
+            const nf = 1 / (near - far);
+
+            out[0] = -2 * lr;
+            out[1] = 0;
+            out[2] = 0;
+            out[3] = 0;
+            out[4] = 0;
+            out[5] = -2 * bt;
+            out[6] = 0;
+            out[7] = 0;
+            out[8] = 0;
+            out[9] = 0;
+            out[10] = 2 * nf;
+            out[11] = 0;
+            out[12] = (left + right) * lr;
+            out[13] = (top + bottom) * bt;
+            out[14] = (far + near) * nf;
+            out[15] = 1;
+            return out;
+        };
+        mat4.translate = function(out, a, v) {
+            out[12] = a[0] * v[0] + a[4] * v[1] + a[8] * v[2] + a[12];
+            out[13] = a[1] * v[0] + a[5] * v[1] + a[9] * v[2] + a[13];
+            out[14] = a[2] * v[0] + a[6] * v[1] + a[10] * v[2] + a[14];
+            out[15] = a[3] * v[0] + a[7] * v[1] + a[11] * v[2] + a[15];
+            return out;
+        };
+        mat4.scale = function(out, a, v) {
+            out[0] = a[0] * v[0];
+            out[1] = a[1] * v[0];
+            out[2] = a[2] * v[0];
+            out[3] = a[3] * v[0];
+            out[4] = a[4] * v[1];
+            out[5] = a[5] * v[1];
+            out[6] = a[6] * v[1];
+            out[7] = a[7] * v[1];
+            out[8] = a[8] * v[2];
+            out[9] = a[9] * v[2];
+            out[10] = a[10] * v[2];
+            out[11] = a[11] * v[2];
+            out[12] = a[12];
+            out[13] = a[13];
+            out[14] = a[14];
+            out[15] = a[15];
+            return out;
+        };
+
+        // Draw game objects
+        function draw() {
+            gl.clearColor(0.0, 0.0, 0.0, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+
+            const projectionMatrix = mat4.create();
+            mat4.ortho(projectionMatrix, 0, canvas.width, canvas.height, 0, -1.0, 1.0);
+
+            // Draw player
+            drawObject(gameState.player, playerTexture, projectionMatrix);
+
+            // Draw blocks
+            gameState.blocks.forEach(block => {
+                drawObject(block, blockTexture, projectionMatrix);
+            });
+
+            // Draw projectiles
+            gameState.projectiles.forEach(projectile => {
+                drawObject(projectile, projectileTexture, projectionMatrix);
+            });
+        }
+
+        function drawObject(object, texture, projectionMatrix) {
+            const modelViewMatrix = mat4.create();
+            mat4.translate(modelViewMatrix, modelViewMatrix, [object.x, object.y, 0.0]);
+            mat4.scale(modelViewMatrix, modelViewMatrix, [object.width / 2, object.height / 2, 1.0]);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffers.position);
+            gl.vertexAttribPointer(programInfo.attribLocations.vertexPosition, 2, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(programInfo.attribLocations.vertexPosition);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffers.textureCoord);
+            gl.vertexAttribPointer(programInfo.attribLocations.textureCoord, 2, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(programInfo.attribLocations.textureCoord);
+
+            gl.useProgram(programInfo.program);
+
+            gl.uniformMatrix4fv(programInfo.uniformLocations.projectionMatrix, false, projectionMatrix);
+            gl.uniformMatrix4fv(programInfo.uniformLocations.modelViewMatrix, false, modelViewMatrix);
+
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.uniform1i(programInfo.uniformLocations.uSampler, 0);
+
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
+
+        // Game over handling
+        function showGameOver() {
+            const gameOverDiv = document.createElement('div');
+            gameOverDiv.id = 'gameOver';
+            gameOverDiv.innerHTML = `
+                <h2>Game Over!</h2>
+                <p>Final Score: ${gameState.score}</p>
+                <button class="shadow__btn" onclick="restartGame()">Play Again</button>
+                `;
+            document.body.appendChild(gameOverDiv);
+            gameOverDiv.style.display = 'block';
+        }
+
+        function restartGame() {
+            gameState.blocks = [];
+            gameState.projectiles = [];
+            gameState.score = 0;
+            gameState.gameOver = false;
+            gameState.player.x = canvas.width / 2 - 25;
+            document.getElementById('score').textContent = '0';
+            const gameOverDiv = document.getElementById('gameOver');
+            if (gameOverDiv) {
+                gameOverDiv.remove();
+            }
+        }
+
+        // Update game state
+        function update() {
+            // Update player position
+            if (gameState.keys['ArrowLeft'] && gameState.player.x > 0) {
+                gameState.player.x -= gameState.player.speed;
+            }
+            if (gameState.keys['ArrowRight'] && gameState.player.x < canvas.width - gameState.player.width) {
+                gameState.player.x += gameState.player.speed;
+            }
+
+            // Shooting
+            if (gameState.keys[' '] && Date.now() - gameState.lastShot > gameState.shootDelay) {
+                const projectile = new Projectile(
+                    gameState.player.x ,
+                    gameState.player.y
+                );
+                gameState.projectiles.push(projectile);
+                gameState.lastShot = Date.now();
+            }
+
+            // Update projectiles
+            gameState.projectiles = gameState.projectiles.filter(projectile => {
+                projectile.update();
+                return projectile.y > 0;
+            });
+
+            // Spawn new blocks
+            if (Math.random() < 0.006) { 
+                const x = Math.random() * (canvas.width - 40);
+                gameState.blocks.push(new Block(x));
+            }
+
+            gameState.blocks = gameState.blocks.filter(block => {
+                block.update();
+
+                // collision with player
+                if (block.intersects(gameState.player)) {
+                    gameState.gameOver = true;
+                    showGameOver();
+                    return false;
+                }
+
+                // collision with projectiles
+                gameState.projectiles = gameState.projectiles.filter(projectile => {
+                    if (block.intersects(projectile)) {
+                        block.hitPoints--;
+                        if (block.hitPoints <= 0) {
+                            gameState.score += 10;
+                            scoreElement.textContent = gameState.score;
+                        }
+                        return false;
+                    }
+                    return true;
+                });
+
+               
+                return block.hitPoints > 0 && block.y < canvas.height;
+            });
+
+        
+            if (gameState.blocks.some(block => block.y + block.height >= canvas.height)) {
+                gameState.gameOver = true;
+                showGameOver();
+            }
+        }
+
+        // Event listeners
+        window.addEventListener('keydown', (e) => {
+            gameState.keys[e.key] = true;
+        });
+
+        window.addEventListener('keyup', (e) => {
+            gameState.keys[e.key] = false;
+        });
+
+        gameLoop();
+        function resizeCanvas() {
+                const maxWidth = 800;
+                const maxHeight = 600;
+                const windowWidth = window.innerWidth;
+                const windowHeight = window.innerHeight;
+                
+                
+                const aspectRatio = 4/3; 
+                let newWidth = Math.min(windowWidth * 0.8, maxWidth);
+                let newHeight = newWidth / aspectRatio;
+                
+                if (newHeight > windowHeight * 0.8) {
+                    newHeight = windowHeight * 0.8;
+                    newWidth = newHeight * aspectRatio;
+                }
+                
+    
+                canvas.width = newWidth;
+                canvas.height = newHeight;
+                
+                gameState.player.width = newWidth * 0.066; 
+                gameState.player.height = newHeight * 0.075;
+                gameState.player.x = Math.min(gameState.player.x, canvas.width - gameState.player.width);
+                gameState.player.y = canvas.height - gameState.player.height - 10;
+                
+
+                gameState.projectiles.forEach(projectile => {
+                    projectile.width = newWidth * 0.033;
+                    projectile.height = newHeight * 0.05; 
+                });
+                
+                // Update block dimensions
+                gameState.blocks.forEach(block => {
+                    block.width = newWidth * 0.066;
+                    block.height = newHeight * 0.1;
+                });
+                
+                
+                gameState.player.speed = newWidth * 0.008; 
+                Block.prototype.speed = newHeight * 0.0025; 
+                Projectile.prototype.speed = newHeight * 0.0175; 
+                
+                gl.viewport(0, 0, canvas.width, canvas.height);
+     }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+
+    
+        const AudioManager = {
+            bgMusic: document.getElementById('bgMusic'),
+            isMusicPlaying: false,
+
+            init: function() {
+                const toggleBtn = document.getElementById('toggleMusic');
+                const volumeSlider = document.getElementById('volumeSlider');
+
+            
+                this.bgMusic.volume = 0.5;
+
+                toggleBtn.addEventListener('click', () => {
+                    if (this.isMusicPlaying) {
+                        this.stopMusic();
+                        toggleBtn.textContent = 'Music: OFF';
+                    } else {
+                        this.playMusic();
+                        toggleBtn.textContent = 'Music: ON';
+                    }
+                });
+
+                volumeSlider.addEventListener('input', (e) => {
+                    const volume = e.target.value / 100;
+                    this.bgMusic.volume = volume;
+                });
+
+                
+                document.addEventListener('click', () => {
+                    if (!this.isMusicPlaying) {
+                        this.playMusic();
+                        toggleBtn.textContent = 'Music: ON';
+                    }
+                }, { once: true });
+            },
+
+            playMusic: function() {
+                this.bgMusic.play().catch(error => {
+                    console.log("Music play failed:", error);
+                });
+                this.isMusicPlaying = true;
+            },
+
+            stopMusic: function() {
+                this.bgMusic.pause();
+                this.bgMusic.currentTime = 0;
+                this.isMusicPlaying = false;
+            },
+
+        }
+
+        // Initialize audio manager
+        AudioManager.init();
+
+    
+        const originalShowGameOver = showGameOver;
+        showGameOver = function() {
+            AudioManager.stopMusic();
+            originalShowGameOver();
+        }
+
+        const originalRestartGame = restartGame;
+        restartGame = function() {
+            AudioManager.playMusic();
+            originalRestartGame();
+        }
+
+    </script>
+</body>
+</html>
